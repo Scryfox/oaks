@@ -53,3 +53,18 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Tools directory
+tools/*
+
+# GBA files
+*.gba
+*.sav
+*.bin
+*.gbfs
+
+# VSCode Files
+.vscode/*
+
+# Build files
+build/*
