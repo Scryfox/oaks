@@ -1,62 +1,95 @@
-CC := arm-none-eabi-gcc
-DEVKIT := C:/devkitpro
-TARGET := demo
-BUILD := build
-CFLAGS := -I$(DEVKIT)/libtonc/include -I$(DEVKIT)/libgba/include -I$(DEVKIT)/libgbfs/include -g -mthumb -DDEV
-SRC := source
-INC := include
+TARGET_EXEC		:= demo
 
-SOURCES := $(wildcard $(SRC)/*.c)
-OBJECTS := $(patsubst $(SRC)/%.c, $(BUILD)/%.o, $(SOURCES))
+DEVKIT			:= /opt/devkitpro
 
-IMG := images
-IMAGES := $(wildcard $(IMG)/*.png)
-PALBINS := $(patsubst $(IMG)/%.png, $(BUILD)/$(IMG)/%.pal.bin, $(IMAGES))
-MAPBINS := $(patsubst $(IMG)/%.png, $(BUILD)/$(IMG)/%.map.bin, $(IMAGES))
-IMGBINS :=$(patsubst $(IMG)/%.png, $(BUILD)/$(IMG)/%.img.bin, $(IMAGES))
-GFXBINS := $(PALBINS) $(MAPBINS) $(IMGBINS)
+BUILD_DIR		:= build
+SRC_DIRS		:= source
 
+SRCS			:= $(shell find $(SRC_DIRS) -name '*.c' -or -name '*.s')
+OBJS			:= $(SRCS:%=$(BUILD_DIR)/%.o)
 
-PROD_PREFIX := prod_
+INC_DIRS		:= $(shell find $(SRC_DIRS) -type d)
 
-dev: $(BUILD)/$(TARGET).gba
+GBA_INC_DIRS	:= $(patsubst %, $(DEVKIT)/%/include, $(shell ls $(DEVKIT) | grep ^lib))
+INC_FLAGS		:= $(addprefix -I,$(INC_DIRS) $(GBA_INC_DIRS))
 
-$(BUILD)/$(TARGET).gba: $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).gbfs
-	cat $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).gbfs > $(BUILD)/$(TARGET).gba
-	gbafix -tScryfox $(BUILD)/$(TARGET).gba
+GBA_LIB_DIRS	:= $(patsubst %, $(DEVKIT)/%/lib, $(shell ls $(DEVKIT) | grep ^lib))
+GBA_LIBS		:= $(shell find $(GBA_LIB_DIRS) -name 'lib*.a' -printf '%P ')
+LIB_FLAGS		:= $(addprefix -L,$(GBA_LIB_DIRS)) $(patsubst lib%.a, -l%, $(GBA_LIBS))
 
-$(BUILD)/$(TARGET).gbfs: $(GFXBINS)
+CROSS			:= arm-none-eabi-
+AS				:= $(CROSS)as
+CC				:= $(CROSS)gcc
+LD				:= $(CROSS)gcc
+OBJCOPY			:= $(CROSS)objcopy
+
+MODEL			:= -mthumb-interwork -mthumb -DDEV
+SPECS			:= -specs=gba.specs
+
+ASFLAGS			:= -mthumb-interwork
+CFLAGS			:= $(INC_FLAGS) $(MODEL) -O2 -Wall -g
+LDFLAGS			:= $(SPECS) $(MODEL) $(LIB_FLAGS) -g
+
+IMG_DIR			:= images
+SPRITE_DIR		:= $(IMG_DIR)/sprites
+BG_DIR			:= $(IMG_DIR)/backgrounds
+
+SPRITE_IMGS			:= $(shell find $(SPRITE_DIR) -name '*.png')
+SPRITE_PAL_BINS		:= $(patsubst %.png, $(BUILD_DIR)/%.pal.bin, $(SPRITE_IMGS))
+SPRITE_MAP_BINS		:= $(patsubst %.png, $(BUILD_DIR)/%.map.bin, $(SPRITE_IMGS))
+SPRITE_TILE_BINS		:= $(patsubst %.png, $(BUILD_DIR)/%.img.bin, $(SPRITE_IMGS))
+SPRITE_BINS		:= $(SPRITE_PAL_BINS) $(SPRITE_MAP_BINS) $(SPRITE_TILE_BINS)
+
+BG_IMGS			:= $(shell find $(BG_DIR) -name '*.png')
+BG_PAL_BINS		:= $(patsubst %.png, $(BUILD_DIR)/%.pal.bin, $(BG_IMGS))
+BG_MAP_BINS		:= $(patsubst %.png, $(BUILD_DIR)/%.map.bin, $(BG_IMGS))
+BG_TILE_BINS		:= $(patsubst %.png, $(BUILD_DIR)/%.img.bin, $(BG_IMGS))
+BG_BINS		:= $(BG_PAL_BINS) $(BG_MAP_BINS) $(BG_TILE_BINS)
+
+PROD_PREFIX		:= prod_
+
+.PHONEY: clean dev run
+
+all:
+	@echo $(BG_DIR)
+
+dev: $(BUILD_DIR)/$(TARGET_EXEC).gba
+
+$(BUILD_DIR)/$(TARGET_EXEC).gba: $(BUILD_DIR)/$(TARGET_EXEC).bin $(BUILD_DIR)/$(TARGET_EXEC).gbfs
+	cat $(BUILD_DIR)/$(TARGET_EXEC).bin $(BUILD_DIR)/$(TARGET_EXEC).gbfs > $(BUILD_DIR)/$(TARGET_EXEC).gba
+	gbafix -tScryfox $(BUILD_DIR)/$(TARGET_EXEC).gba
+
+$(BUILD_DIR)/$(TARGET_EXEC).gbfs: $(BG_BINS) $(SPRITE_BINS)
 	gbfs $@ $(filter-out ".bin", $^)
 
-# TODO: Combine these if possible or make grit only output the needed portion
-$(BUILD)/$(IMG)/%.pal.bin: $(IMG)/%.png | $(BUILD)/$(IMG)
-	grit $< -W1 -gt -gB4 -mR4 -mLs -ftb -o $@
+$(BUILD_DIR)/$(BG_DIR)/%.pal.bin: $(BG_DIR)/%.png | $(BUILD_DIR)/$(BG_DIR)
+	grit $^ -W1 -gt -gB4 -mR4 -mLs -ftb -o $@
 
-$(BUILD)/$(IMG)/%.map.bin: $(IMG)/%.png | $(BUILD)/$(IMG)
-	grit $< -W1 -gt -gB4 -mR4 -mLs -ftb -o $@
+$(BUILD_DIR)/$(SPRITE_DIR)/%.pal.bin: $(SPRITE_DIR)/%.png | $(BUILD_DIR)/$(SPRITE_DIR)
+	grit $^ -W1 -gt -gB4 -ftb -o $@
 
-$(BUILD)/$(IMG)/%.img.bin: $(IMG)/%.png | $(BUILD)/$(IMG)
-	grit $< -W1 -gt -gB4 -mR4 -mLs -ftb -o $@
+$(BUILD_DIR)/$(TARGET_EXEC).bin: $(BUILD_DIR)/$(TARGET_EXEC).elf
+	$(OBJCOPY) -O binary $(BUILD_DIR)/$(TARGET_EXEC).elf $(BUILD_DIR)/$(TARGET_EXEC).bin
+	padbin 256 $(BUILD_DIR)/$(TARGET_EXEC).bin
 
-$(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
-	arm-none-eabi-objcopy -O binary $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin
-	padbin 256 $(BUILD)/$(TARGET).bin
-
-$(BUILD)/$(TARGET).elf: $(OBJECTS)
+$(BUILD_DIR)/$(TARGET_EXEC).elf: $(OBJS)
 	$(info	Objects are $^)
-	$(CC) $^ -L$(DEVKIT)/libgba/lib -lgba -lmm \
-	-L$(DEVKIT)/libtonc/lib -ltonc \
-	-L$(DEVKIT)/libgbfs/lib -lgbfs \
-	-specs=gba.specs -g -mthumb -o $(BUILD)/$(TARGET).elf
+	$(CC) $^ $(LDFLAGS) -o $(BUILD_DIR)/$(TARGET_EXEC).elf
 
-$(BUILD)/%.o: $(SRC)/%.c | $(BUILD)
-	$(CC) -I$(INC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/%.c.o: %.c | $(BUILD_DIR)/$(SRC_DIRS)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD):
-	mkdir -p $@
+$(BUILD_DIR):
+	@mkdir -p $@
 
-$(BUILD)/$(IMG): $(BUILD)
-	mkdir -p $@
+$(BUILD_DIR)/$(BG_DIR): $(BUILD_DIR)
+	@mkdir -p $@
+
+$(BUILD_DIR)/$(SPRITE_DIR): $(BUILD_DIR)
+	@mkdir -p $@
+
+$(BUILD_DIR)/$(SRC_DIRS): $(BUILD_DIR)
+	@mkdir -p $@
 
 # prod: $(BUILD)/$(PROD_PREFIX)$(TARGET).gba
 
@@ -80,10 +113,8 @@ $(BUILD)/$(IMG): $(BUILD)
 # $(BUILD)/$(TARGET).s: $(BUILD)/$(TARGET).gbfs
 # 	bin2s $^ > $(BUILD)/$(TARGET).s
 
-run: $(BUILD)/$(TARGET).gba
-	mgba $(BUILD)/$(TARGET).gba
-
-.PHONEY: clean
+run: $(BUILD_DIR)/$(TARGET_EXEC).gba
+	mgba $(BUILD_DIR)/$(TARGET_EXEC).gba
 
 clean: 
 	rm -r build
