@@ -11,72 +11,75 @@
 #include <gbfs.h>
 // #include "../build/demo.h"
 
+#include "camera.h"
+#include "room.h"
+
+void enable_interrupts()
+{
+        // Init interrupts and VBlank irq.
+        irq_init(NULL);
+        irq_add(II_VBLANK, NULL);
+}
+
+const GBFS_FILE *get_gbfs_file()
+{
+#ifdef DEV
+        // #pragma message("Compiling for DEV")
+        // For DEV build
+        return find_first_gbfs_file(find_first_gbfs_file);
+#else
+        // #pragma message("Compiling for DEBUG")
+        // For PROD build
+        extern const int demo_gbfs_size asm("demo_gbfs_size");
+        extern u8 demo_gbfs[3584] asm("demo_gbfs");
+        return (GBFS_FILE *)demo_gbfs;
+#endif
+}
+
 int main()
 {
 
-#ifdef DEV
-#pragma message("Compiling for DEV")
-	// For DEV build
-	const GBFS_FILE *data = find_first_gbfs_file(find_first_gbfs_file);
-#else
-#pragma message("Compiling for DEBUG")
-	// For PROD build
-	extern const int demo_gbfs_size asm("demo_gbfs_size");
-	extern u8 demo_gbfs[3584] asm("demo_gbfs");
-	const GBFS_FILE *data = (GBFS_FILE *)demo_gbfs;
-#endif
+        enable_interrupts();
 
-	// Init interrupts and VBlank irq.
-	irq_init(NULL);
-	irq_add(II_VBLANK, NULL);
+        REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_OBJ | DCNT_OBJ_1D;
 
-	const char *bg_pal_string = "col_test.pal.bin";
-	const char *bg_tile_string = "col_test.img.bin";
-	const char *bg_map_string = "col_test.map.bin";
+        const GBFS_FILE *data = get_gbfs_file();
 
-	// Load palette
-	gbfs_copy_obj(pal_bg_mem, data, bg_pal_string);
-	// Load tiles into CBB 0
-	gbfs_copy_obj(&tile_mem[0][0], data, bg_tile_string);
-	// Load map into SBB 30
-	gbfs_copy_obj(&se_mem[30][0], data, bg_map_string);
+        struct room main_room = {64 * 8, 32 * 8, "test_bg"};
+        load_room_data(data, main_room);
 
-	u32 tid = 1, pb = 0;
-	const char *sp_pal_string = "test.pal.bin";
-	const char *sp_img_string = "test.img.bin";
+        OBJ_ATTR obj_buffer[128];
 
-	gbfs_copy_obj(&pal_obj_mem[pb], data, sp_pal_string);
-	gbfs_copy_obj(&tile_mem[4][tid], data, sp_img_string);
+        struct game_obj player = {200, 0, 64, 64,
+                                  0, 0, 0, 0, 1,
+                                  255, &obj_buffer[0], NULL};
+        load_game_obj_data(data, player);
 
-	// set up BG0 for a 4bpp 64x32t map, using
-	//   using charblock 0 and screenblock 31
-	REG_BG0CNT = BG_CBB(0) | BG_SBB(30) | BG_4BPP | BG_REG_64x32;
-	REG_DISPCNT = DCNT_MODE0 | DCNT_BG0 | DCNT_OBJ | DCNT_OBJ_1D;
+        struct camera main_camera = create_camera(&player, &main_room);
 
-	OBJ_ATTR obj_buffer[128];
+        // obj_set_pos(player.oam_slot, player.x, player.y);
 
-	OBJ_ATTR *metr = &obj_buffer[0];
+        while (1)
+        {
+                VBlankIntrWait();
+                key_poll();
 
-	obj_set_attr(metr,
-				 ATTR0_SQUARE,
-				 ATTR1_SIZE_64,
-				 ATTR2_PALBANK(pb) | tid);
+                player.x += key_tri_horz();
+                player.y += key_tri_vert();
 
-	int x = 96, y = 32;
+                if ((s16)player.x < 0)
+                        player.x = 0;
+                if (player.x > main_room.width - player.width)
+                        player.x = main_room.width - player.width;
+                if ((s16)player.y < 0)
+                        player.y = 0;
+                if (player.y > main_room.height - player.height)
+                        player.y = main_room.height - player.height;
 
-	obj_set_pos(metr, x, y);
+                update_camera(&main_camera);
 
-	while (1)
-	{
-		VBlankIntrWait();
-		key_poll();
+                oam_copy(oam_mem, obj_buffer, 1);
+        }
 
-		x += key_tri_horz();
-		y += key_tri_vert();
-
-		obj_set_pos(metr, x, y);
-		oam_copy(oam_mem, obj_buffer, 1);
-	}
-
-	return 0;
+        return 0;
 }
